@@ -1,7 +1,7 @@
 from django.core.cache import cache
-from django.test import TestCase, Client
+from django.test import Client, TestCase
 
-from ..models import User, Post
+from ..models import Post, User
 
 
 class CacheTest(TestCase):

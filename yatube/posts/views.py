@@ -1,8 +1,8 @@
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import render, get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 
-from .forms import PostForm, CommentForm
-from .models import Post, Group, User, Follow
+from .forms import CommentForm, PostForm
+from .models import Follow, Group, Post, User
 from .utils import paginate
 
 NUMBER_OF_POSTS = 10
@@ -33,7 +33,6 @@ def profile(request, username):
     author = get_object_or_404(User, username=username)
     author_post = author.posts.select_related('author')
     page_obj = paginate(request, author_post, NUMBER_OF_POSTS)
-    num_of_posts = author_post.count()
     following = False
     if request.user.is_authenticated:
         if Follow.objects.filter(user=request.user, author=author):
@@ -41,7 +40,6 @@ def profile(request, username):
     context = {
         'author': author,
         'page_obj': page_obj,
-        'num_of_posts': num_of_posts,
         'is_profile': True,
         'following': following
     }
@@ -50,12 +48,10 @@ def profile(request, username):
 
 def post_detail(request, post_id):
     post = get_object_or_404(Post, id=post_id)
-    num_of_posts = post.author.posts.count()
     form = CommentForm(request.POST or None)
     comments = post.comments.select_related('post')
     context = {
         'post': post,
-        'num_of_posts': num_of_posts,
         'form': form,
         'comments': comments
     }
