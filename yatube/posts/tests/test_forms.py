@@ -7,14 +7,13 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
-from ..models import Group, Post, User
+from ..models import Group, Post, User, Comment
 
 TEMP_MEDIA_ROOT = tempfile.mkdtemp(dir=settings.BASE_DIR)
 
 
 @override_settings(MEDIA_ROOT=TEMP_MEDIA_ROOT)
 class PostPagesTests(TestCase):
-
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -22,6 +21,11 @@ class PostPagesTests(TestCase):
         cls.group = Group.objects.create(
             title='Тестовый заголовок',
             slug='test-slug'
+        )
+        cls.post = Post.objects.create(
+            author=cls.user,
+            text='тестовый текст',
+            group=cls.group
         )
         small_gif = (
             b'\x47\x49\x46\x38\x39\x61\x02\x00'
@@ -41,6 +45,9 @@ class PostPagesTests(TestCase):
             'group': cls.group.id,
             'image': uploaded
         }
+        cls.comment_form_data = {
+            'text': 'test comment'
+        }
         cls.post_create_rev = reverse('posts:post_create')
 
     @classmethod
@@ -51,7 +58,7 @@ class PostPagesTests(TestCase):
     def setUp(self):
         self.guest_client = Client()
         self.authorized_user = Client()
-        self.authorized_user.force_login(self.user)
+        self.authorized_user.force_login(PostPagesTests.user)
 
     def test_create_post_in_form(self):
         """Тест на создание поста в БД."""
@@ -65,7 +72,7 @@ class PostPagesTests(TestCase):
             text='тестовый текст',
             group=PostPagesTests.group.id,
         ).exists())
-        new_post = Post.objects.last()
+        new_post = Post.objects.first()
         pairs_for_test = [
             (Post.objects.count(), num_of_posts + 1),
             (new_post.text, PostPagesTests.form_data['text']),
@@ -79,13 +86,8 @@ class PostPagesTests(TestCase):
 
     def test_edit_post_in_form_and_group_change(self):
         """Тест на проверку редактирования поста и изменения группы поста."""
-        post = Post.objects.create(
-            author=PostPagesTests.user,
-            text='тестовый текст',
-            group=PostPagesTests.group
-        )
         post_edit_reverse = reverse(
-            'posts:post_edit', kwargs={'post_id': post.id}
+            'posts:post_edit', kwargs={'post_id': PostPagesTests.post.id}
         )
         group2 = Group.objects.create(
             title='Группа 2',
@@ -94,7 +96,7 @@ class PostPagesTests(TestCase):
         form_data_edit = {
             'text': 'Новый текст',
             'group': group2.id,
-            'id': post.id
+            'id': PostPagesTests.post.id
         }
         self.authorized_user.post(post_edit_reverse, form_data_edit)
         response = self.authorized_user.get(post_edit_reverse)
@@ -102,12 +104,12 @@ class PostPagesTests(TestCase):
         self.assertFalse(Post.objects.filter(
             text='Новый текст',
             group=PostPagesTests.group.id,
-            id=post.id
+            id=PostPagesTests.post.id
         ).exists())
         self.assertTrue(Post.objects.filter(
             text='Новый текст',
             group=group2.id,
-            id=post.id
+            id=PostPagesTests.post.id
         ).exists())
 
     def test_edit_and_create_post_guest(self):
@@ -120,3 +122,40 @@ class PostPagesTests(TestCase):
         )
         self.assertEqual(response.status_code, HTTPStatus.FOUND)
         self.assertRedirects(response, '/auth/login/?next=/create/')
+
+    def test_comment_auth_user(self):
+        """Тест на создание комментария авторизованным пользователем."""
+        response = self.authorized_user.post(
+            reverse(
+                'posts:add_comment',
+                kwargs={'post_id': f'{PostPagesTests.post.id}'}
+            ),
+            PostPagesTests.comment_form_data
+        )
+        self.assertRedirects(
+            response,
+            reverse(
+                'posts:post_detail',
+                kwargs={'post_id': f'{PostPagesTests.post.id}'}
+            )
+        )
+        self.assertTrue(
+            Comment.objects.filter(
+                text='test comment',
+            ).exists()
+        )
+
+    def test_comment_quest_client(self):
+        """Тест на создание комментария неавторизованным пользователем."""
+        self.guest_client.post(
+            reverse(
+                'posts:add_comment',
+                kwargs={'post_id': f'{PostPagesTests.post.id}'}
+            ),
+            PostPagesTests.comment_form_data
+        )
+        self.assertFalse(
+            Comment.objects.filter(
+                text='test comment',
+            ).exists()
+        )

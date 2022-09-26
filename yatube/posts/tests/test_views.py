@@ -7,7 +7,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
-from ..models import Group, Post, User
+from ..models import Group, Post, User, Follow
 
 TEMP_MEDIA_ROOT = tempfile.mkdtemp(dir=settings.BASE_DIR)
 
@@ -18,6 +18,7 @@ class PostPagesTests(TestCase):
     def setUpClass(cls):
         super().setUpClass()
         cls.user = User.objects.create(username='test')
+        cls.follower = User.objects.create(username='follower')
         cls.group = Group.objects.create(
             title='Тестовый заголовок',
             description='Тестовое описание группы',
@@ -71,20 +72,25 @@ class PostPagesTests(TestCase):
                     'posts:post_edit',
                     kwargs={'post_id': cls.post.id}
                 )
+            ),
+            'follow_index': (
+                'posts/follow.html', reverse('posts:follow_index')
             )
         }
+        cls.follow_rev = reverse(
+            'posts:profile_follow',
+            kwargs={'username': cls.user.username}
+        )
+        cls.unfollow_rev = reverse(
+            'posts:profile_unfollow',
+            kwargs={'username': cls.user.username}
+        )
         cls.form_fields = {
             'text': forms.fields.CharField,
             'group': forms.fields.ChoiceField,
         }
-        cls.index_url = reverse('posts:index')
-        cls.group_list_url = reverse(
-                'posts:group_list',
-                kwargs={'slug': cls.group.slug}
-        )
-        cls.profile_url = reverse(
-                'posts:profile',
-                kwargs={'username': cls.post.author.username}
+        Follow.objects.create(
+            user=cls.follower, author=cls.user
         )
 
     @classmethod
@@ -95,7 +101,9 @@ class PostPagesTests(TestCase):
     def setUp(self):
         self.guest_client = Client()
         self.authorized_user = Client()
-        self.authorized_user.force_login(self.user)
+        self.authorized_user.force_login(PostPagesTests.user)
+        self.follower_user = Client()
+        self.follower_user.force_login(PostPagesTests.follower)
 
     def context_post_assert(self, obj):
         self.assertEqual(obj.text, PostPagesTests.post.text)
@@ -106,7 +114,7 @@ class PostPagesTests(TestCase):
 
     def test_pages_uses_correct_template(self):
         """URL использует соответствующий шаблон."""
-        for template, reverse_name in self.reverses.values():
+        for template, reverse_name in PostPagesTests.reverses.values():
             with self.subTest(reverse_name=reverse_name):
                 response = self.authorized_user.get(reverse_name)
                 self.assertTemplateUsed(response, template)
@@ -114,9 +122,9 @@ class PostPagesTests(TestCase):
     def test_index_has_correct_context(self):
         """Тест контекста для index, group_list, profile."""
         urls = (
-            PostPagesTests.index_url,
-            PostPagesTests.group_list_url,
-            PostPagesTests.profile_url
+            PostPagesTests.reverses['index'][1],
+            PostPagesTests.reverses['group_list'][1],
+            PostPagesTests.reverses['profile'][1]
         )
         for url in urls:
             with self.subTest(url=url):
@@ -125,7 +133,9 @@ class PostPagesTests(TestCase):
 
     def test_post_detail_has_correct_context(self):
         """Тест контекста для detail."""
-        response = self.authorized_user.get(self.reverses['post_detail'][1])
+        response = self.authorized_user.get(
+            PostPagesTests.reverses['post_detail'][1]
+        )
         self.context_post_assert(response.context['post'])
         self.assertEqual(
             response.context['post'].author.posts.count(),
@@ -134,16 +144,20 @@ class PostPagesTests(TestCase):
 
     def test_create_post_has_correct_context(self):
         """Тест контекста для create."""
-        response = self.authorized_user.get(self.reverses['post_create'][1])
-        for value, expected in self.form_fields.items():
+        response = self.authorized_user.get(
+            PostPagesTests.reverses['post_create'][1]
+        )
+        for value, expected in PostPagesTests.form_fields.items():
             with self.subTest(value=value):
                 form_field = response.context.get('form').fields.get(value)
                 self.assertIsInstance(form_field, expected)
 
     def test_post_edit_has_correct_context(self):
         """Тест контекста для edit."""
-        response = self.authorized_user.get(self.reverses['post_edit'][1])
-        for value, expected in self.form_fields.items():
+        response = self.authorized_user.get(
+            PostPagesTests.reverses['post_edit'][1]
+        )
+        for value, expected in PostPagesTests.form_fields.items():
             with self.subTest(value=value):
                 form_field = response.context.get('form').fields.get(value)
                 self.assertIsInstance(form_field, expected)
@@ -152,9 +166,9 @@ class PostPagesTests(TestCase):
     def test_post_create_group_check(self):
         """Тест добавления поста при указании группы."""
         urls = (
-            PostPagesTests.index_url,
-            PostPagesTests.group_list_url,
-            PostPagesTests.profile_url
+            PostPagesTests.reverses['index'][1],
+            PostPagesTests.reverses['group_list'][1],
+            PostPagesTests.reverses['profile'][1]
         )
         for url in urls:
             with self.subTest(url=url):
@@ -180,9 +194,9 @@ class PostPagesTests(TestCase):
             (2, 4),
         ]
         urls = (
-            PostPagesTests.index_url,
-            PostPagesTests.group_list_url,
-            PostPagesTests.profile_url
+            PostPagesTests.reverses['index'][1],
+            PostPagesTests.reverses['group_list'][1],
+            PostPagesTests.reverses['profile'][1]
         )
         for url in urls:
             with self.subTest(url=url):
@@ -191,3 +205,31 @@ class PostPagesTests(TestCase):
                     self.assertEqual(
                         len(response.context['page_obj']), post_num
                     )
+
+    def test_follow_unfollow(self):
+        """Тест подписки на пользователей и удаление их из подписок."""
+        self.follower_user.post(PostPagesTests.follow_rev)
+        self.assertTrue(
+            Follow.objects.filter(
+                user=PostPagesTests.follower,
+                author=PostPagesTests.user
+            ).exists()
+        )
+
+        self.follower_user.post(PostPagesTests.unfollow_rev)
+        self.assertFalse(
+            Follow.objects.filter(
+                user=PostPagesTests.follower,
+                author=PostPagesTests.user
+            ).exists()
+        )
+
+    def test_correct_follow_showing(self):
+        """Тест корректного отображение подписок."""
+        follow_index_rev = reverse('posts:follow_index')
+
+        response = self.authorized_user.get(follow_index_rev)
+        self.assertNotIn(self.post, response.context['page_obj'])
+
+        response = self.follower_user.get(follow_index_rev)
+        self.assertIn(self.post, response.context['page_obj'])
